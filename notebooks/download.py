@@ -6,9 +6,10 @@ import pandas as pd
 import requests
 import xarray as xr
 from tqdm.notebook import tqdm
+import time
 
 
-def fetch_hydrocron(info, start_time, end_time, fields):
+def fetch_hydrocron(info, start_time, end_time, fields, collection_type = "SWOT_L2_HR_RiverSP_D"):
     """
     Fetch hydrocron data for a given node.
     
@@ -27,7 +28,8 @@ def fetch_hydrocron(info, start_time, end_time, fields):
         "?feature=Node&feature_id={node_id}"
         "&start_time={start_time}&end_time={end_time}"
         "&output=csv"
-        "&fields={fields}"
+        "&collection_name={collection_type}"
+        "&fields={fields},"
     )
     
     node_id = info['node_id']
@@ -35,7 +37,7 @@ def fetch_hydrocron(info, start_time, end_time, fields):
         response = requests.get(
             hydrocron_url_template.format(
                 node_id=node_id, fields=','.join(fields),
-                start_time=start_time, end_time=end_time),
+                start_time=start_time, end_time=end_time, collection_type=collection_type),
             timeout=10  # Avoid hanging requests
         )
         if response.status_code != 200:
@@ -95,6 +97,7 @@ def download_mrms(ts_df, var_name, precip_path, hourly=False):
         )
         print(mrms_url)
         # Download the MRMS data
+        start_time = time.time()
         response = requests.get(mrms_url)
         if response.status_code != 200:
             print(f"Failed to download MRMS data for {dt_utm0}: "
@@ -113,6 +116,8 @@ def download_mrms(ts_df, var_name, precip_path, hourly=False):
             # Read it with xarray + cfgrib
             ds = xr.open_dataset(tmp.name, engine='cfgrib')
 
+            end_time = time.time()
+            print(f"Downloaded MRMS data for {dt_utm0} in {end_time - start_time:.2f} seconds")
             for _, row in swot_df.iterrows():
                 # Get the nearest MRMS data for the SWOT nodes
                 ds_var_name = list(ds.data_vars)[0]  # MRMS file has one variable
@@ -126,6 +131,9 @@ def download_mrms(ts_df, var_name, precip_path, hourly=False):
                     'time': dt,
                     var_name: var_value
                 }, index=[0]))
+            loop_time = time.time() - end_time
+            print(f"Processed {len(swot_df)} nodes for {dt_utm0} in {loop_time:.2f} seconds")
+            
 
     precip_df = pd.concat(new_rows)
     precip_df.to_csv(
