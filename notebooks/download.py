@@ -56,6 +56,54 @@ def fetch_hydrocron(info, start_time, end_time, fields, collection_type = "SWOT_
     except Exception as e:
         print(f"Exception for node {node_id}: {e}")
         return None
+
+def fetch_hydrocron_node(node_id, start_time, end_time, fields, collection_type = "SWOT_L2_HR_RiverSP_D"):
+    """
+    Fetch hydrocron data for a given node.
+    
+    Parameters
+    ----------
+    info : dict
+        Dictionary with keys:
+        - 'node_id': str, node identifier
+        - 'start_time': str, start time in ISO format
+        - 'end_time': str, end time in ISO format
+        - 'fields': list of str, fields to retrieve (e.g., ['wse', 'width'])
+    """
+
+    hydrocron_url_template = (
+        "https://soto.podaac.earthdatacloud.nasa.gov/hydrocron/v1/timeseries"
+        "?feature=Node&feature_id={node_id}"
+        "&start_time={start_time}&end_time={end_time}"
+        "&output=csv"
+        "&collection_name={collection_type}"
+        "&fields={fields},"
+    )
+    
+    # node_id = info['node_id']
+    try:
+        response = requests.get(
+            hydrocron_url_template.format(
+                node_id=node_id, fields=','.join(fields),
+                start_time=start_time, end_time=end_time, collection_type=collection_type),
+            timeout=10  # Avoid hanging requests
+        )
+        if response.status_code != 200:
+            print(f"Error fetching hydrocron data for "
+                  f"{node_id}: {response.json().get('error')}")
+            return None
+
+        hydrocron_df = pd.read_csv(
+            StringIO(response.json()['results']['csv']),
+            index_col=['node_id', 'time_str'],
+            parse_dates=True,
+            na_values=['no_data']
+        )
+        return hydrocron_df
+
+    except Exception as e:
+        print(f"Exception for node {node_id}: {e}")
+        return None
     
 
 def download_mrms(ts_df, var_name, precip_path, hourly=False):
