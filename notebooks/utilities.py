@@ -39,9 +39,12 @@ def retrieve_stations(data_dir=Path('/Users/masa6503/repos/swot-precip-validatio
     return stations
 
 
-def retrieve_active_stations(usgs_id_list, timeseries_start="2023-04-01T00:00:00Z"):
+def retrieve_active_stations(usgs_id_list, timeseries_start="2023-04-01T00:00:00Z", geometry=False):
     tomorrow = datetime.now(tz=timezone.utc) + timedelta(days=2)
     # Format as ISO 8601 UTC midnight
+    fields = ['monitoring_location_id']
+    if geometry:
+            fields.append('geometry')
     tomorrow_str = tomorrow.strftime("%Y-%m-%dT00:00:00Z")
     timeseries = timeseries_start+"/"+tomorrow_str
     all_active_ids = []
@@ -52,7 +55,7 @@ def retrieve_active_stations(usgs_id_list, timeseries_start="2023-04-01T00:00:00
             monitoring_location_id=list(usgs_id_list[i:end_index]), 
             parameter_code="00065", 
             time=timeseries
-        )[0]['monitoring_location_id'].unique())
+        )[0][['monitoring_location_id']].unique())
         all_active_ids.extend(active_ids)
     return (all_active_ids)
 

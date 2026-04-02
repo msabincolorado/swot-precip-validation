@@ -187,3 +187,104 @@ def download_mrms(ts_df, var_name, precip_path, hourly=False):
     precip_df.to_csv(
         precip_path.parent / precip_path.name.format(var_name=var_name), 
         index=False)
+    
+
+def download_mrms_vectorized(ts_df, var_name, precip_path, hourly=False):
+    """
+    Download MRMS data to match SWOT time series data.
+    
+    Parameters
+    ----------
+    ts_df : pd.DataFrame
+        DataFrame with columns ['node_id', 'lat', 'lon', 'time_str']
+    var_name : str
+        MRMS variable name, e.g., 'PrecipRate'
+    hourly : bool, optional
+        If True, download hourly data (minute=0), else every 2 minutes.
+        Default is False.
+    """
+    new_rows = []
+    for dt, swot_df in tqdm(ts_df.reset_index().groupby('time')):
+        ## Build MRMS URL
+        # Convert to UTC just in case
+        dt_utm0 = dt.tz_convert('UTC')
+        # Get date components
+        year, month, day = dt_utm0.year, dt_utm0.month, dt_utm0.day
+        hour, minute = dt_utm0.hour, dt_utm0.minute
+        # Round down to nearest even minute (MRMS data is every 2 minutes)
+        if hourly:
+            mrms_minute = 0  # Use the hour only
+        else:
+            # Round down to nearest even minute
+            mrms_minute = (minute // 2) * 2
+        # Format MRMS URL
+        mrms_url = (
+            "https://noaa-mrms-pds.s3.amazonaws.com/CONUS"
+            f"/{var_name}"
+            f"/{year}{month:02d}{day:02d}"
+            f"/MRMS_{var_name}"
+            f"_{year}{month:02d}{day:02d}-{hour:02d}{mrms_minute:02d}00"
+            ".grib2.gz"
+        )
+        print(mrms_url)
+        # Download the MRMS data
+        start_time = time.time()
+        response = requests.get(mrms_url)
+        if response.status_code != 200:
+            print(f"Failed to download MRMS data for {dt_utm0}: "
+                f"{response.status_code}")
+            continue
+
+        # Read the GRIB2 data from the gzipped content
+        with gzip.open(BytesIO(response.content), 'rb') as gz:
+            grib_bytes = gz.read()
+
+        # Write to a temporary .grib2 file
+        with tempfile.NamedTemporaryFile(suffix=".grib2") as tmp:
+            tmp.write(grib_bytes)
+            tmp.flush()  # Ensure all bytes are written
+
+            # Read it with xarray + cfgrib
+            ds = xr.open_dataset(tmp.name, engine='cfgrib')
+            
+            end_time = time.time()
+            print(f"Downloaded test MRMS data for {dt_utm0} in {end_time - start_time:.2f} seconds")
+            ds_var_name = list(ds.data_vars)[0]
+
+            interp_vals = ds[ds_var_name].interp(
+                latitude=xr.DataArray(swot_df['lat'].values, dims="points"),
+                longitude=xr.DataArray(swot_df['lon'].values % 360, dims="points"),
+                method='nearest'
+            ).values
+
+            new_rows.append(pd.DataFrame({
+                'node_id': swot_df['node_id'].values,
+                'time': dt,
+                var_name: interp_vals
+            }))
+
+
+
+            # for _, row in swot_df.iterrows():
+            #     print(row)
+            #     # Get the nearest MRMS data for the SWOT nodes
+            #     ds_var_name = list(ds.data_vars)[0]  # MRMS file has one variable
+            #     print(type(ds[ds_var_name].data))
+            #     var_value = ds[ds_var_name].interp(
+            #         latitude=row['lat'],
+            #         longitude=row['lon'] % 360, # Longitude is 0-360
+            #         method='nearest'
+            #     ).values
+            #     new_rows.append(pd.DataFrame({
+            #         'node_id': row['node_id'],
+            #         'time': dt,
+            #         var_name: var_value
+            #     }, index=[0]))
+            loop_time = time.time() - end_time
+            print(f"Processed {len(swot_df)} nodes for {year}-{month}-{day}-{minute} in {loop_time:.2f} seconds")
+            
+
+    precip_df = pd.concat(new_rows)
+    precip_df.to_csv(
+        precip_path.parent / precip_path.name.format(var_name=var_name), 
+        index=False)
