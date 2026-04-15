@@ -7,6 +7,8 @@ import requests
 import xarray as xr
 from tqdm.notebook import tqdm
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 
 def fetch_hydrocron(info, start_time, end_time, fields, collection_type = "SWOT_L2_HR_RiverSP_D"):
@@ -338,3 +340,106 @@ def download_mrms_vectorized(ts_df, var_name, precip_path, hourly=False):
     precip_df.to_csv(
         precip_path.parent / precip_path.name.format(var_name=var_name), 
         index=False)
+
+
+    
+def download_mrms_parallel(ts_df, var_name, precip_path, hourly=False):
+    """
+    Download MRMS data to match SWOT time series data.
+    
+    Parameters
+    ----------
+    ts_df : pd.DataFrame
+        DataFrame with columns ['node_id', 'lat', 'lon', 'time_str']
+    var_name : str
+        MRMS variable name, e.g., 'PrecipRate'
+    hourly : bool, optional
+        If True, download hourly data (minute=0), else every 2 minutes.
+        Default is False.
+    """
+    ts_df = ts_df.copy().reset_index()
+    ts_df["time_utc"] = pd.to_datetime(ts_df["time_str"]).dt.tz_convert("UTC")
+    if hourly:
+        # ts_df["mrms_time"] = ts_df["time_utc"].dt.floor("H")
+        ts_df["mrms_time"] = ts_df["time_utc"].dt.floor("h")
+    else:
+        ts_df["mrms_time"] = ts_df["time_utc"].dt.floor("2min")
+    new_rows = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        # Submit all tasks
+        futures = [executor.submit(fetch_mrms_minute, dt, swot_df, var_name, hourly) 
+                for dt, swot_df in ts_df.groupby('mrms_time')]
+        
+        # Collect results with tqdm progress bar
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            result = future.result()
+            if result is not None:
+                new_rows.append(result)
+    precip_df = pd.concat(new_rows)
+    precip_df.to_csv(
+        precip_path.parent / precip_path.name.format(var_name=var_name), 
+        index=False)
+
+def fetch_mrms_minute(dt, swot_df, var_name, hourly):
+    ## Build MRMS URL
+    # Convert to UTC just in case
+    dt_utm0 = dt.tz_convert('UTC')
+    # Get date components
+    year, month, day = dt_utm0.year, dt_utm0.month, dt_utm0.day
+    hour, minute = dt_utm0.hour, dt_utm0.minute
+    # Round down to nearest even minute (MRMS data is every 2 minutes)
+    if hourly:
+        mrms_minute = 0  # Use the hour only
+    else:
+        # Round down to nearest even minute
+        mrms_minute = (minute // 2) * 2
+    # Format MRMS URL
+    mrms_url = (
+        "https://noaa-mrms-pds.s3.amazonaws.com/CONUS"
+        f"/{var_name}"
+        f"/{year}{month:02d}{day:02d}"
+        f"/MRMS_{var_name}"
+        f"_{year}{month:02d}{day:02d}-{hour:02d}{mrms_minute:02d}00"
+        ".grib2.gz"
+    )
+    # print(mrms_url)
+    # Download the MRMS data
+    start_time = time.time()
+    try:
+        response = requests.get(mrms_url)
+        if response.status_code != 200:
+            print(f"Failed to download MRMS data for {dt_utm0}: "
+                f"{response.status_code}")
+            return pd.DataFrame(columns=['node_id', 'mrms_time', var_name])
+
+        # Read the GRIB2 data from the gzipped content
+        with gzip.open(BytesIO(response.content), 'rb') as gz:
+            grib_bytes = gz.read()
+
+        # Write to a temporary .grib2 file
+        with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+            tmp.write(grib_bytes)
+            tmp_path = tmp.name
+
+            # Read it with xarray + cfgrib
+            ds = xr.open_dataset(tmp.name, engine='cfgrib')
+            
+            end_time = time.time()
+            # print(f"Downloaded test MRMS data for {dt_utm0} in {end_time - start_time:.2f} seconds")
+            ds_var_name = list(ds.data_vars)[0]
+
+            interp_vals = ds[ds_var_name].interp(
+                latitude=xr.DataArray(swot_df['lat'].values, dims="points"),
+                longitude=xr.DataArray(swot_df['lon'].values % 360, dims="points"),
+                method='nearest'
+            ).values
+
+            new_rows=pd.DataFrame({
+                'node_id': swot_df['node_id'].values,
+                'mrms_time': dt,
+                var_name: interp_vals
+            })
+            return new_rows
+    except Exception as e:
+        print(f"Error processing MRMS data for {dt_utm0}: {e}")
+        return pd.DataFrame(columns=['node_id', 'mrms_time', var_name])
