@@ -51,11 +51,16 @@ def retrieve_active_stations(usgs_id_list, timeseries_start="2023-04-01T00:00:00
     for i in range(0, len(usgs_id_list), 50):
         end_index = min(i + 50, len(usgs_id_list))
         # print(i, end_index)
+        # print(waterdata.get_latest_continuous(
+        #     monitoring_location_id=list(usgs_id_list[i:end_index]), 
+        #     parameter_code="00065", 
+        #     time=timeseries
+        # )[0][['monitoring_location_id']])
         active_ids = list(waterdata.get_latest_continuous(
             monitoring_location_id=list(usgs_id_list[i:end_index]), 
             parameter_code="00065", 
             time=timeseries
-        )[0][['monitoring_location_id']].unique())
+        )[0]['monitoring_location_id'].unique())
         all_active_ids.extend(active_ids)
     return (all_active_ids)
 

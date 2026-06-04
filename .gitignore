@@ -1,6 +1,7 @@
 # Don't upload data files
 data/
 figures/
+*data_downloads/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

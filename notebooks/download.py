@@ -8,6 +8,8 @@ import xarray as xr
 from tqdm.notebook import tqdm
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import earthaccess
+import zipfile
 
 
 
@@ -343,7 +345,7 @@ def download_mrms_vectorized(ts_df, var_name, precip_path, hourly=False):
 
 
     
-def download_mrms_parallel(ts_df, var_name, precip_path, hourly=False):
+def download_mrms_parallel(ts_df, var_name, output_path, hourly=False):
     """
     Download MRMS data to match SWOT time series data.
     
@@ -377,7 +379,8 @@ def download_mrms_parallel(ts_df, var_name, precip_path, hourly=False):
                 new_rows.append(result)
     precip_df = pd.concat(new_rows)
     precip_df.to_csv(
-        precip_path.parent / precip_path.name.format(var_name=var_name), 
+        output_path,
+        # precip_path.parent / precip_path.name.format(var_name=var_name), 
         index=False)
 
 def fetch_mrms_minute(dt, swot_df, var_name, hourly):
@@ -443,3 +446,16 @@ def fetch_mrms_minute(dt, swot_df, var_name, hourly):
     except Exception as e:
         print(f"Error processing MRMS data for {dt_utm0}: {e}")
         return pd.DataFrame(columns=['node_id', 'mrms_time', var_name])
+    
+
+
+
+def download_and_process_granule(granule):
+     earthaccess.download([granule], "./data_downloads")
+     print('data downloaded')
+     filename = earthaccess.results.DataGranule.data_links(granule, access='external')
+     filename = filename[0].split("/")[-1]
+     filename
+     with zipfile.ZipFile(f'data_downloads/{filename}', 'r') as zip_ref:
+          zip_ref.extractall('data_downloads')
+     filename_shp = filename.replace('.zip','.shp')
